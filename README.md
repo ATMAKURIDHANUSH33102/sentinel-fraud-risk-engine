@@ -1,6 +1,6 @@
 # Sentinel — Explainable Payment Fraud Risk Engine
 
-Sentinel is a defense-only payment fraud risk engine developed for **Razorpay AI Buildathon Track 2 (AI Risk Manager)**. It evaluates real-time transactions, estimates fraud probabilities via machine learning, routes decisions into **ALLOW**, **REVIEW**, or **BLOCK** risk tiers, and outputs human-interpretable evidence without relying on non-deterministic LLMs.
+Sentinel is a defense-only payment fraud risk engine developed for **Razorpay AI Builder Internship 2026 — Track 02: AI Risk Manager**. It evaluates real-time transactions, estimates fraud probabilities via machine learning, routes decisions into **ALLOW**, **REVIEW**, or **BLOCK** risk tiers, and outputs human-interpretable evidence without relying on non-deterministic LLMs.
 
 ---
 
@@ -124,9 +124,8 @@ Evaluated strictly once on the 88,581 held-out test transactions with frozen thr
   - **Expected Total Cost:** `$177,110.00` ($2.00 per transaction)
 - **3-Tier Test Traffic Routing:**
   - **ALLOW (`p < 0.2977`):** 62,687 transactions (`70.8%` of traffic) | Fraud missed: 493
-  - **REVIEW (`0.2977 <= p < 0.8023`):** 24,121 transactions (`27.2%` of traffic) | Fraud intercepted: 1,464
-  - **BLOCK (`p >= 0.8023`):** 1,773 transactions (`2.0%` of traffic) | Fraud blocked: 1,126 | Block Precision: `63.5%`
-  - **Total Fraud Intercepted (Review + Block):** **`84.0%`** (2,590 of 3,083 fraudulent transactions)
+  - **REVIEW (`0.2977 <= p < 0.8023`):** 24,121 transactions (`27.2%` of traffic) | Frauds flagged for inspection: 1,464
+  - **BLOCK (`p >= 0.8023`):** 1,773 transactions (`2.0%` of traffic) | Frauds directly blocked: 1,126 | Block Precision: `63.5%`
 
 ---
 
@@ -147,7 +146,7 @@ pip install -r requirements.txt
 ```powershell
 .\venv\Scripts\python -m pytest tests/ -v
 ```
-*(Runs all 35 tests across imports, data loader, feature engineering, pipeline, evaluation, API, and audit log in ~7s)*
+*(Runs all 41 tests across imports, data loader, feature engineering, pipeline, evaluation, API, audit log, and batch processing in ~7s)*
 
 ---
 
@@ -289,3 +288,13 @@ Accessible via the **"📁 Batch CSV Risk Analysis"** tab in the Streamlit dashb
   - Interactive table of original transaction attributes enriched with `fraud_probability`, `risk_level`, and `decision`.
   - Automatic persistence of scored transactions to the SQLite audit log (`data/processed/audit_log.db`).
 - **Download Scored Results:** Click the **"📥 Download Scored CSV"** button to export the complete scored dataset containing original features and risk decisions.
+
+---
+
+## 11. Engineering Challenges & Failure Recovery
+
+During final integration, the Streamlit dashboard unexpectedly reverted to an earlier version with only three tabs, so the batch CSV analysis feature that had already been implemented was no longer visible in the UI. The issue was traced layer-by-layer through the dashboard, inference layer, audit logger, and tests. The underlying batch inference and audit functionality was still intact, so the problem was identified as an application-layer regression rather than an ML model failure.
+
+The batch interface was restored and verified end-to-end, including CSV upload, batch scoring, ALLOW/REVIEW/BLOCK summaries, failed-row handling, CSV export, and SQLite audit logging.
+
+During demo preparation, the first synthetic demonstration CSV also produced mostly REVIEW decisions and no BLOCK decisions. Instead of changing the trained model or routing thresholds just to improve the demonstration, a better synthetic demonstration dataset was created and scored through the unchanged inference pipeline. The final demonstration produced 6 ALLOW, 4 REVIEW, and 2 BLOCK decisions.

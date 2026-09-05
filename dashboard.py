@@ -71,21 +71,21 @@ with st.sidebar:
     col1, col2 = st.columns(2)
     col1.metric("Val PR-AUC", "0.4713")
     col2.metric("Test PR-AUC", "0.4537")
-    
-    col3, col4 = st.columns(2)
-    col3.metric("Test ROC-AUC", "0.8812")
-    col4.metric("Fraud Intercepted", "84.0%")
+    st.metric("Test ROC-AUC", "0.8812")
 
     st.subheader("⚖️ Decision Thresholds")
     st.markdown(f"- **ALLOW (Low Risk):** `p < {detector.th_review:.4f}`")
     st.markdown(f"- **REVIEW (Medium Risk):** `{detector.th_review:.4f} <= p < {detector.th_block:.4f}`")
     st.markdown(f"- **BLOCK (High Risk):** `p >= {detector.th_block:.4f}`")
-    st.caption("Tuned strictly on validation data with FP=$10, FN=$100 cost trade-offs.")
+
+    st.subheader("📐 Evaluation Operating Threshold")
+    st.markdown("**Threshold:** `0.5643`")
+    st.caption("Selected on validation data minimizing total cost (FP = $10, FN = $100 simulation assumptions).")
 
 
 # Main Body: Tabs
-tab_predict, tab_audit, tab_model = st.tabs([
-    "🔍 Real-Time Scoring", "📋 Audit Log", "📊 Model Performance"
+tab_predict, tab_batch, tab_audit, tab_model = st.tabs([
+    "🔍 Real-Time Scoring", "📁 Batch CSV Risk Analysis", "📋 Audit Log", "📊 Model Performance"
 ])
 
 
@@ -94,6 +94,44 @@ tab_predict, tab_audit, tab_model = st.tabs([
 # =====================================================================
 with tab_predict:
     st.subheader("Score Inbound Transaction")
+
+    # Decision Logic
+    st.markdown("##### 🚦 Decision Logic")
+    dl_col1, dl_col2, dl_col3 = st.columns(3)
+    with dl_col1:
+        st.markdown(
+            f"""
+            <div style="background-color: rgba(46, 125, 50, 0.12); border-left: 4px solid #2e7d32; padding: 8px 12px; border-radius: 4px;">
+                <span style="color: #4caf50; font-weight: bold; font-size: 0.85rem;">LOW RISK</span><br>
+                <code style="font-size: 0.85rem;">p &lt; {detector.th_review:.4f}</code><br>
+                <span style="font-weight: bold; font-size: 0.95rem;">&rarr; ALLOW</span>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    with dl_col2:
+        st.markdown(
+            f"""
+            <div style="background-color: rgba(239, 108, 0, 0.12); border-left: 4px solid #ef6c00; padding: 8px 12px; border-radius: 4px;">
+                <span style="color: #ffa726; font-weight: bold; font-size: 0.85rem;">MEDIUM RISK</span><br>
+                <code style="font-size: 0.85rem;">{detector.th_review:.4f} &le; p &lt; {detector.th_block:.4f}</code><br>
+                <span style="font-weight: bold; font-size: 0.95rem;">&rarr; REVIEW</span>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    with dl_col3:
+        st.markdown(
+            f"""
+            <div style="background-color: rgba(198, 40, 40, 0.12); border-left: 4px solid #c62828; padding: 8px 12px; border-radius: 4px;">
+                <span style="color: #ef5350; font-weight: bold; font-size: 0.85rem;">HIGH RISK</span><br>
+                <code style="font-size: 0.85rem;">p &ge; {detector.th_block:.4f}</code><br>
+                <span style="font-weight: bold; font-size: 0.95rem;">&rarr; BLOCK</span>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    st.write("")
 
     preset = st.selectbox(
         "Load Preset Profile:",
@@ -239,9 +277,26 @@ with tab_predict:
             if decision == "ALLOW":
                 st.info("✅ **ALLOW**: Instant frictionless clearance")
             elif decision == "REVIEW":
-                st.info("⚠️ **REVIEW**: Routed to manual inspection / 3DS challenge")
+                st.info("⚠️ **REVIEW**: Additional verification / manual inspection recommended")
             else:
                 st.info("⛔ **BLOCK**: Transaction rejected to prevent chargeback")
+
+        # Decision Rationale
+        if decision == "BLOCK":
+            st.error(
+                f"**Decision Rationale:** Fraud probability `{p:.4f}` meets or exceeds the high-risk block threshold "
+                f"(`p >= {detector.th_block:.4f}`). Automated transaction block applied."
+            )
+        elif decision == "REVIEW":
+            st.warning(
+                f"**Decision Rationale:** Fraud probability `{p:.4f}` falls within the review range "
+                f"(`{detector.th_review:.4f} <= p < {detector.th_block:.4f}`). Additional verification / manual inspection recommended."
+            )
+        else:
+            st.success(
+                f"**Decision Rationale:** Fraud probability `{p:.4f}` is below the review threshold "
+                f"(`p < {detector.th_review:.4f}`). Instant frictionless clearance applied."
+            )
 
         st.markdown("#### 🔬 Explainability Evidence")
         ev_col1, ev_col2 = st.columns(2)
@@ -263,7 +318,113 @@ with tab_predict:
 
 
 # =====================================================================
-# TAB 2: AUDIT LOG
+# TAB 2: BATCH CSV RISK ANALYSIS
+# =====================================================================
+with tab_batch:
+    st.subheader("📁 Batch CSV Risk Analysis")
+    st.caption("Upload a transaction CSV to evaluate risk across multiple transactions simultaneously.")
+
+    st.markdown("""
+    **Required Column:** `TransactionAmt` (or `TransactionAMT`).  
+    **Supported Columns:** `TransactionID`, `ProductCD`, `card1`–`card6`, `addr1`, `addr2`, `dist1`, `P_emaildomain`, `C1`–`C14`, `D1`–`D15`.  
+    *(Missing optional fields are automatically imputed using the saved pipeline median and constant values).*
+    """)
+
+    uploaded_file = st.file_uploader(
+        "Upload Transaction CSV",
+        type=["csv"],
+        key="batch_csv_uploader",
+        help="Upload a CSV file containing transaction records.",
+    )
+
+    if uploaded_file is not None:
+        try:
+            input_df = pd.read_csv(uploaded_file)
+        except Exception as e:
+            st.error(f"Failed to parse CSV file: {e}")
+            input_df = None
+
+        if input_df is not None:
+            st.info(f"Loaded **{len(input_df)}** rows and **{len(input_df.columns)}** columns from uploaded file.")
+
+            with st.expander("Preview Uploaded Data", expanded=False):
+                st.dataframe(input_df.head(5), width="stretch")
+
+            if st.button("⚡ Run Batch Risk Analysis", type="primary", key="btn_run_batch"):
+                with st.spinner("Scoring transactions through Sentinel risk engine..."):
+                    try:
+                        scored_df, failed_rows, summary = detector.score_dataframe(input_df)
+
+                        # KPI Summary
+                        st.markdown("### 📊 Batch Risk Summary")
+                        kpi_col1, kpi_col2, kpi_col3, kpi_col4, kpi_col5 = st.columns(5)
+                        kpi_col1.metric("Total Transactions", summary["total_transactions"])
+                        kpi_col2.metric("✅ ALLOW", f"{summary['allow_count']} ({summary['allow_rate']:.1%})")
+                        kpi_col3.metric("⚠️ REVIEW", f"{summary['review_count']} ({summary['review_rate']:.1%})")
+                        kpi_col4.metric("⛔ BLOCK", f"{summary['block_count']} ({summary['block_rate']:.1%})")
+                        kpi_col5.metric("🚨 High Risk Rate", f"{summary['high_risk_rate']:.1%}")
+
+                        st.markdown(
+                            f"**Successfully Scored:** `{summary['successfully_scored']}` | "
+                            f"**Failed Rows:** `{summary['failed_transactions']}`"
+                        )
+
+                        # Error Isolation - viewable failed rows
+                        if failed_rows:
+                            with st.expander(f"⚠️ View {len(failed_rows)} Failed Rows", expanded=True):
+                                st.warning("The following rows failed input validation and were skipped without crashing the batch:")
+                                st.dataframe(pd.DataFrame(failed_rows), width="stretch")
+
+                        if summary["successfully_scored"] > 0:
+                            # ALLOW / REVIEW / BLOCK bar chart
+                            chart_df = pd.DataFrame({
+                                "Decision": ["ALLOW", "REVIEW", "BLOCK"],
+                                "Count": [summary["allow_count"], summary["review_count"], summary["block_count"]],
+                            }).set_index("Decision")
+                            st.bar_chart(chart_df)
+
+                            # Audit Logging
+                            batch_audit_records = []
+                            for _, r in scored_df.iterrows():
+                                raw_amt = r.get("TransactionAmt", r.get("TransactionAMT"))
+                                batch_audit_records.append({
+                                    "transaction_id": r.get("TransactionID"),
+                                    "fraud_probability": r["fraud_probability"],
+                                    "risk_level": r["risk_level"],
+                                    "decision": r["decision"],
+                                    "transaction_amount": float(raw_amt) if pd.notna(raw_amt) else None,
+                                })
+                            try:
+                                n_logged = audit_logger.log_batch(batch_audit_records)
+                                st.caption(f"Logged {n_logged} transactions to SQLite audit log (`data/processed/audit_log.db`).")
+                            except Exception as audit_err:
+                                st.warning(f"Could not persist batch to audit log: {audit_err}")
+
+                            # Scored Transaction Table
+                            st.markdown("### 📋 Scored Transactions")
+                            display_df = scored_df.copy()
+                            front_cols = [c for c in ["TransactionID", "TransactionAmt", "fraud_probability", "risk_level", "decision"] if c in display_df.columns]
+                            other_cols = [c for c in display_df.columns if c not in front_cols]
+                            st.dataframe(display_df[front_cols + other_cols], width="stretch")
+
+                            # Download Scored CSV
+                            csv_data = scored_df.to_csv(index=False).encode("utf-8")
+                            st.download_button(
+                                label="📥 Download Scored CSV",
+                                data=csv_data,
+                                file_name="scored_transactions.csv",
+                                mime="text/csv",
+                                key="btn_download_scored_csv",
+                            )
+
+                    except ValueError as val_err:
+                        st.error(f"CSV Validation Error: {val_err}")
+                    except Exception as err:
+                        st.error(f"Unexpected error during batch risk analysis: {err}")
+
+
+# =====================================================================
+# TAB 3: AUDIT LOG
 # =====================================================================
 with tab_audit:
     st.subheader("Recent Prediction Audit Trail (SQLite)")
@@ -283,7 +444,7 @@ with tab_audit:
 
 
 # =====================================================================
-# TAB 3: MODEL PERFORMANCE
+# TAB 4: MODEL PERFORMANCE
 # =====================================================================
 with tab_model:
     st.subheader("Model Performance & Honest Evaluation")
@@ -302,8 +463,20 @@ with tab_model:
     }
     st.table(pd.DataFrame(perf_data))
 
+    st.markdown("---")
+    st.subheader("📐 Evaluation Operating Threshold")
     st.markdown("""
-    **Test Confusion Matrix (88,581 held-out transactions at threshold 0.5643):**
+    - **Operating Threshold:** `0.5643`
+    - **Selection Methodology:** Selected strictly on validation data to minimize total expected business cost.
+    - **Simulation Cost Assumptions:**
+      - False Positive (FP) = **$10.00** (customer friction / support overhead)
+      - False Negative (FN) = **$100.00** (unrecovered chargeback loss)
+    
+    *(Note: This single operating threshold is used for binary benchmarking and confusion matrix evaluation. In live transaction processing, Sentinel routes decisions using the 3-tier Decision Thresholds: ALLOW < 0.2977, REVIEW [0.2977, 0.8023), and BLOCK >= 0.8023).*
+    """)
+
+    st.markdown("""
+    **Test Confusion Matrix (88,581 held-out transactions at operating threshold 0.5643):**
     - **True Negatives (TN):** `80,247` (Legitimate correctly cleared)
     - **False Positives (FP):** `5,251` (Legitimate flagged - $10 friction cost)
     - **False Negatives (FN):** `1,246` (Fraud missed - $100 chargeback cost)
